@@ -26,10 +26,12 @@ func readCredentials(c *cli.Context) (string, string) {
 	if !emailRegex.MatchString(email) {
 		log.Fatalln("Email not valid")
 	}
-
-	fmt.Print("Password: ")
-	bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
-	password := string(bytePassword)
+	password := c.String("password")
+	if password == "" {
+		fmt.Print("Password: ")
+		bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
+		password = string(bytePassword)
+	}
 	if password == "" {
 		log.Fatalln("\nNo password provided")
 	}

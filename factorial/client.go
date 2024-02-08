@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -23,7 +24,8 @@ const BASE_URL = "https://api.factorialhr.com"
 
 type factorialClient struct {
 	http.Client
-	employee_id int
+	user_id     int
+	employee_id float64
 	period_id   int
 	calendar    []calendarDay
 	shifts      []shift
@@ -35,6 +37,42 @@ type factorialClient struct {
 	until_today bool
 }
 
+type access struct {
+	Id                               int
+	User_id                          int
+	Company_id                       int
+	Invited                          bool
+	Invited_on                       string
+	Confirmed                        bool
+	Is_admin                         bool
+	Role                             string
+	Current                          bool
+	Calendar_token                   string
+	Permissions_group_id             int
+	Can_login                        bool
+	Analytics_consent                string
+	First_name                       string
+	Last_name                        string
+	First_day_of_week                string
+	Unconfirmed_email                string
+	Joined                           bool
+	Locale                           string
+	Avatar                           string
+	Avatar_full                      string
+	Tos                              bool
+	Discoverability_widget_value     string
+	Time_format                      int
+	Email                            string
+	Login_email                      string
+	Unconfirmed_communications_email string
+	Communications_email             string
+	Is_hiring_manager                bool
+}
+
+type employee struct {
+	access_id int
+	id        int
+}
 type period struct {
 	Id          int
 	Employee_id int
@@ -52,12 +90,14 @@ type calendarDay struct {
 }
 
 type shift struct {
-	Id        int64  `json:"id"`
-	Period_id int64  `json:"period_id"`
-	Day       int    `json:"day"`
-	Clock_in  string `json:"clock_in"`
-	Clock_out string `json:"clock_out"`
-	Minutes   int64  `json:"minutes"`
+	Id            int64  `json:"id"`
+	Period_id     int64  `json:"period_id"`
+	Day           int    `json:"day"`
+	Clock_in      string `json:"clock_in"`
+	Clock_out     string `json:"clock_out"`
+	Minutes       int64  `json:"minutes"`
+	Location_type string `json:"location_type"`
+	Source        string `json:"source"`
 }
 
 type fun func() error
@@ -86,6 +126,9 @@ func NewFactorialClient(email, password string, year, month int, in, out string,
 	c.Client = http.Client{Jar: jar}
 	spinner.Suffix = " Logging in..."
 	handleError(spinner, c.login(email, password))
+	spinner.Suffix = " Getting employee data..."
+	handleError(spinner, c.getUserId())
+	handleError(spinner, c.getEmployeeId())
 	spinner.Suffix = " Getting periods data..."
 	handleError(spinner, c.setPeriodId())
 	spinner.Suffix = " Getting calendar data..."
@@ -113,6 +156,7 @@ func (c *factorialClient) ClockIn(dry_run bool) {
 		spinner.Restart()
 		spinner.Reverse()
 		t = time.Date(c.year, time.Month(c.month), d.Day, 0, 0, 0, 0, time.UTC)
+		wekday := t.Weekday()
 		message = fmt.Sprintf("%s... ", t.Format("02 Jan"))
 		spinner.Prefix = message + " "
 		clocked_in, clocked_times := c.clockedIn(d.Day, shift)
@@ -128,9 +172,14 @@ func (c *factorialClient) ClockIn(dry_run bool) {
 			message = fmt.Sprintf("%s ❌ %s\n", message, "Skipping: --until-today")
 		} else {
 			ok = true
+			shift.Location_type = "work_from_home"
+			if wekday == time.Wednesday {
+				shift.Location_type = "office"
+			}
 			if !dry_run {
 				ok = false
 				shift.Day = d.Day
+				shift.Source = "desktop"
 				body, _ = json.Marshal(shift)
 				resp, _ = c.Post(BASE_URL+"/attendance/shifts", "application/json;charset=UTF-8", bytes.NewBuffer(body))
 				if resp.StatusCode == 201 {
@@ -138,7 +187,7 @@ func (c *factorialClient) ClockIn(dry_run bool) {
 				}
 			}
 			if ok {
-				message = fmt.Sprintf("%s ✅ %s - %s\n", message, c.clock_in, c.clock_out)
+				message = fmt.Sprintf("%s ✅ %s - %s at %s\n", message, c.clock_in, c.clock_out, shift.Location_type)
 			} else {
 				message = fmt.Sprintf("%s ❌ Error when attempting to clock in\n", message)
 			}
@@ -189,6 +238,45 @@ func (c *factorialClient) login(email, password string) error {
 	return nil
 }
 
+func (c *factorialClient) getUserId() error {
+	resp, _ := c.Get(BASE_URL + "/accesses")
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return errors.New("Error retrieving employee data to user_id")
+	}
+	var employees []access
+	body, _ := ioutil.ReadAll(resp.Body)
+	json.Unmarshal(body, &employees)
+	for _, e := range employees {
+		if e.Current {
+			c.user_id = e.Id
+			return nil
+		}
+	}
+	return errors.New("Error retrieving employee data to user_id")
+}
+
+func (c *factorialClient) getEmployeeId() error {
+	resp, _ := c.Get(BASE_URL + "/employees")
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return errors.New("Error retrieving employee data to employee_id")
+	}
+	//	var employees []employee
+	var employees []map[string]interface{}
+
+	body, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(body, &employees)
+	for _, e := range employees {
+		if e["access_id"].(float64) == float64(c.user_id) {
+			c.employee_id = e["id"].(float64)
+			//fmt.Printf("e: %v\n", e)
+			return nil
+		}
+	}
+	return errors.New("Error retrieving employee data to employee_id")
+}
+
 func (c *factorialClient) setPeriodId() error {
 	err := errors.New("Could not find the specified year/month in the available periods (" + strconv.Itoa(c.month) + "/" + strconv.Itoa(c.year) + ")")
 	resp, _ := c.Get(BASE_URL + "/attendance/periods?year=" + strconv.Itoa(c.year) + "&month=" + strconv.Itoa(c.month))
@@ -200,8 +288,8 @@ func (c *factorialClient) setPeriodId() error {
 	body, _ := ioutil.ReadAll(resp.Body)
 	json.Unmarshal(body, &periods)
 	for _, p := range periods {
-		if p.Year == c.year && p.Month == c.month {
-			c.employee_id = p.Employee_id
+		if p.Year == c.year && p.Month == c.month && float64(p.Employee_id) == c.employee_id {
+			//c.employee_id = p.Employee_id
 			c.period_id = p.Id
 			return nil
 		}
@@ -212,7 +300,7 @@ func (c *factorialClient) setPeriodId() error {
 func (c *factorialClient) setCalendar() error {
 	u, _ := url.Parse(BASE_URL + "/attendance/calendar")
 	q := u.Query()
-	q.Set("id", strconv.Itoa(c.employee_id))
+	q.Set("id", strconv.FormatFloat(c.employee_id, 'f', 0, 64))
 	q.Set("year", strconv.Itoa(c.year))
 	q.Set("month", strconv.Itoa(c.month))
 	u.RawQuery = q.Encode()
@@ -232,7 +320,7 @@ func (c *factorialClient) setCalendar() error {
 func (c *factorialClient) setShifts() error {
 	u, _ := url.Parse(BASE_URL + "/attendance/shifts")
 	q := u.Query()
-	q.Set("employee_id", strconv.Itoa(c.employee_id))
+	q.Set("employee_id", strconv.FormatFloat(c.employee_id, 'f', 0, 64))
 	q.Set("year", strconv.Itoa(c.year))
 	q.Set("month", strconv.Itoa(c.month))
 	u.RawQuery = q.Encode()

@@ -27,6 +27,11 @@ func main() {
 				Aliases: []string{"e"},
 				Usage:   "you factorial email address",
 			},
+			&cli.StringFlag{
+				Name:    "password",
+				Aliases: []string{"p"},
+				Usage:   "you factorial password address",
+			},
 			&cli.IntFlag{
 				Name:        "year",
 				Aliases:     []string{"y"},

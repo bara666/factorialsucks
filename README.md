@@ -11,6 +11,7 @@ USAGE:
 
 GLOBAL OPTIONS:
    --email value, -e value        you factorial email address
+   --password value, -p value     password from cli (optional, default requested from console)
    --year YYYY, -y YYYY           clock-in year YYYY (default: current year)
    --month MM, -m MM              clock-in month MM (default: current month)
    --clock-in HH:MM, --ci HH:MM   clock-in time HH:MM (default: "10:00")
